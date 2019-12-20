@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import logging
+import shutil
 
 from .. import utilities
 from .. import config
@@ -38,9 +39,9 @@ def alignment(input):
     """
     Runs metaphlan to identify initial list of bugs
     """
-   
+
     exe="metaphlan2.py"
-    opts=config.metaphlan_opts  
+    opts=config.metaphlan_opts
 
     # check the metaphlan2 version to determine additional options
     metaphlan2_version = utilities.check_software_version("metaphlan2.py",config.metaphlan_version)
@@ -49,28 +50,54 @@ def alignment(input):
         message="NOTE: Running with MetaPhlAn2 v2.9 with the LEGACY databases. Please keep an eye out for the " +\
             "next version of HUMAnN2 (v2.9) which will use the latest MetaPhlAn2 and ChocoPhlAn databases."
         logger.info(message)
-        print("\n"+message+"\n")    
+        print("\n"+message+"\n")
 
     # find the location of the metaphlan dir
     metaphlan_dir=utilities.return_exe_path(exe)
- 
+
     #determine input type as fastq or fasta
     input_type="multi" + utilities.fasta_or_fastq(input)
-    
+
     # outfile name
     bug_file = utilities.name_temp_file(config.bugs_list_name)
-    bowtie2_out = utilities.name_temp_file(config.metaphlan_bowtie2_name) 
+    bowtie2_out = utilities.name_temp_file(config.metaphlan_bowtie2_name)
 
-    args=[input]+opts+["-o",bug_file,"--input_type",input_type, "--bowtie2out",bowtie2_out]
-    
+    # input_type bowtie2out
+    is_opt = None
+    opts_dict = dict()
+    for opt in opts:
+        if is_opt is None and not opt.startswith('-'):
+            opts_dict['INPUT_FILE'] = opt
+        elif is_opt is None and opt.startswith('-'):
+            is_opt = opt
+            opts_dict[opt] = None
+        else:
+            opts_dict[is_opt] = opt
+            is_opt = None
+    outfiles = [bug_file, bowtie2_out]
+    ignore_opts = set(['INPUT_FILE', '--input_type', '--bowtie2out', '--output_file', '-o'])
+    if 'INPUT_FILE' in opts_dict and '--input_type' in opts_dict:
+        if opts_dict['--input_type'] == 'bowtie2out':
+            if os.path.exists(opts_dict['INPUT_FILE']):
+                input = opts_dict['INPUT_FILE']
+                input_type = 'bowtie2out'
+                shutil.copy(opts_dict['INPUT_FILE'], bowtie2_out)
+                outfiles = [bug_file]
+            if '--bowtie2db' in opts_dict:
+                ignore_opts.add('--bowtie2db')
+    new_opts = list()
+    [new_opts.extend([k, opts_dict[k]]) for k in opts_dict if k not in ignore_opts]
+
+    args=[input]+new_opts+["-o",bug_file,"--input_type",input_type, "--bowtie2out",bowtie2_out]
+
     if config.threads >1:
         args+=["--nproc",config.threads]
 
     message="Running " + exe + " ........"
     logger.info(message)
     print("\n"+message+"\n")
-    utilities.execute_command(exe, args, [input], [bug_file, bowtie2_out])
-    
+    utilities.execute_command(exe, args, [input], outfiles)
+
     return bug_file
 
 def create_custom_database(chocophlan_dir, bug_file):
